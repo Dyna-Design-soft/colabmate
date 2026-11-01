@@ -90,9 +90,100 @@ class ColabApi {
     ];
   }
 
-  Future<Map<String, dynamic>> _get(String path) async {
+  /// One runtime, with fresh connection info (the proxy token is
+  /// short-lived; call this again when it nears [RuntimeConnection.expireTime]).
+  Future<RuntimeInfo> getRuntime(String name) async =>
+      RuntimeInfo.fromJson(await _get('v1beta/$name'));
+
+  /// Starts a new runtime of type [spec] (e.g. T4 GPU). Waits for Colab to
+  /// assign the machine, which can take a minute.
+  Future<RuntimeInfo> createRuntime(
+    RuntimeSpecKey spec, {
+    Duration timeout = const Duration(minutes: 5),
+  }) async {
+    var op = await _send(
+      'POST',
+      'v1beta/runtimes',
+      data: {'runtimeSpec': spec.toJson()},
+    );
+    final deadline = DateTime.now().add(timeout);
+    while (op['done'] != true) {
+      final name = op['name'] as String?;
+      if (name == null) {
+        throw const ColabApiException('Colab did not return an operation.');
+      }
+      if (DateTime.now().isAfter(deadline)) {
+        throw const ColabApiException(
+          'Timed out waiting for Colab to start the runtime.',
+        );
+      }
+      // Long-poll: returns when done or after ~30 s.
+      op = await _send('GET', 'v1/$name:wait', query: {'timeout': '30s'});
+    }
+    final error = op['error'];
+    if (error is Map) {
+      throw ColabApiException(
+        _runtimeErrorMessage(error, spec),
+        status: (error['code'] as num?)?.toInt(),
+      );
+    }
+    final response = (op['response'] as Map?)?.cast<String, dynamic>();
+    if (response == null) {
+      throw const ColabApiException('Colab returned no runtime.');
+    }
+    final runtime = RuntimeInfo.fromJson(response);
+    // The create response may omit connection info; fetch it.
+    return runtime.connection == null ? getRuntime(runtime.name) : runtime;
+  }
+
+  /// Stops (releases) a runtime. Anything running on it is lost.
+  Future<void> deleteRuntime(String name) =>
+      _send('DELETE', 'v1beta/$name', query: {'allowMissing': 'true'});
+
+  /// Compute-unit usage. Uses Colab's own user-info endpoint, which may not
+  /// accept third-party apps — returns null instead of failing then.
+  Future<ColabUsage?> getUsage() async {
     try {
-      final res = await _dio.get<Map<String, dynamic>>(path);
+      final data = await _send(
+        'GET',
+        'https://colab.pa.googleapis.com/v1/user-info',
+        query: {'get_ccu_consumption_info': 'true'},
+      );
+      return ColabUsage.fromJson(data);
+    } catch (e) {
+      // Optional feature: hide the usage card on any failure.
+      return null;
+    }
+  }
+
+  static String _runtimeErrorMessage(Map error, RuntimeSpecKey spec) {
+    final message = error['message'] as String? ?? 'Unknown error';
+    final text = message.toLowerCase();
+    if (text.contains('unavailable') || text.contains('resource_exhausted')) {
+      return '${spec.label} is not available right now (Colab may be out of '
+          'free GPUs, or you hit a usage limit). Try again later or pick CPU.';
+    }
+    if (text.contains('too many')) {
+      return 'You already have the maximum number of runtimes. Stop one first.';
+    }
+    return 'Could not start ${spec.label}: $message';
+  }
+
+  Future<Map<String, dynamic>> _get(String path) => _send('GET', path);
+
+  Future<Map<String, dynamic>> _send(
+    String method,
+    String path, {
+    Object? data,
+    Map<String, String>? query,
+  }) async {
+    try {
+      final res = await _dio.request<Map<String, dynamic>>(
+        path,
+        data: data,
+        queryParameters: query,
+        options: Options(method: method),
+      );
       return res.data ?? const {};
     } on DioException catch (e) {
       throw _map(e);

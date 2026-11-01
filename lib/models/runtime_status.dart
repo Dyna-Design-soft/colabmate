@@ -189,3 +189,120 @@ enum SubscriptionTier {
 
 /// Kernel state (spec §4.3 `KernelStatus`).
 enum KernelStatus { starting, idle, busy, disconnected }
+
+/// One GPU on a runtime (from `/api/colab/resources`).
+@immutable
+class GpuStats {
+  const GpuStats({
+    this.name,
+    this.utilization = 0,
+    this.memoryUsedBytes = 0,
+    this.memoryTotalBytes = 0,
+  });
+
+  factory GpuStats.fromJson(Map<String, dynamic> j) => GpuStats(
+    name: j['name'] as String?,
+    utilization: (j['gpuUtilization'] as num?)?.toDouble() ?? 0,
+    memoryUsedBytes: _int(j['memoryUsedBytes']),
+    memoryTotalBytes: _int(j['memoryTotalBytes']),
+  );
+
+  final String? name;
+
+  /// 0–1.
+  final double utilization;
+  final int memoryUsedBytes;
+  final int memoryTotalBytes;
+
+  /// 0–1.
+  double get memoryFraction =>
+      memoryTotalBytes == 0 ? 0 : memoryUsedBytes / memoryTotalBytes;
+}
+
+/// RAM / disk / GPU usage of a runtime (FR-03).
+@immutable
+class RuntimeResources {
+  const RuntimeResources({
+    this.ramUsedBytes = 0,
+    this.ramTotalBytes = 0,
+    this.diskUsedBytes = 0,
+    this.diskTotalBytes = 0,
+    this.gpus = const [],
+  });
+
+  factory RuntimeResources.fromJson(Map<String, dynamic> j) {
+    final mem = (j['memory'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final total = _int(mem['totalBytes']);
+    final free = _int(mem['freeBytes']);
+    var diskUsed = 0, diskTotal = 0;
+    for (final d in (j['disks'] as List? ?? const []).whereType<Map>()) {
+      final fs = (d['filesystem'] as Map?) ?? const {};
+      diskUsed += _int(fs['usedBytes']);
+      diskTotal += _int(fs['totalBytes']);
+    }
+    return RuntimeResources(
+      ramTotalBytes: total,
+      ramUsedBytes: total - free,
+      diskUsedBytes: diskUsed,
+      diskTotalBytes: diskTotal,
+      gpus: [
+        for (final g in (j['gpus'] as List? ?? const []).whereType<Map>())
+          GpuStats.fromJson(g.cast<String, dynamic>()),
+      ],
+    );
+  }
+
+  final int ramUsedBytes;
+  final int ramTotalBytes;
+  final int diskUsedBytes;
+  final int diskTotalBytes;
+  final List<GpuStats> gpus;
+
+  double get ramFraction =>
+      ramTotalBytes == 0 ? 0 : ramUsedBytes / ramTotalBytes;
+  double get diskFraction =>
+      diskTotalBytes == 0 ? 0 : diskUsedBytes / diskTotalBytes;
+}
+
+/// Colab compute-unit usage (from Colab's user-info endpoint; may be
+/// unavailable to third-party apps).
+@immutable
+class ColabUsage {
+  const ColabUsage({
+    required this.consumptionRateHourly,
+    required this.paidBalance,
+    this.freeRemaining,
+  });
+
+  factory ColabUsage.fromJson(Map<String, dynamic> j) => ColabUsage(
+    consumptionRateHourly:
+        (j['consumptionRateHourly'] as num?)?.toDouble() ?? 0,
+    paidBalance: (j['paidComputeUnitsBalance'] as num?)?.toDouble() ?? 0,
+    // Milli-CCUs, encoded as a string (Int64 in ProtoJSON).
+    freeRemaining: switch ((j['freeCcuQuotaInfo']
+        as Map?)?['remainingTokens']) {
+      final Object v => (num.tryParse('$v') ?? 0) / 1000,
+      null => null,
+    },
+  );
+
+  /// Compute units used per hour by all running runtimes.
+  final double consumptionRateHourly;
+  final double paidBalance;
+
+  /// Remaining free compute units (free tier only).
+  final double? freeRemaining;
+
+  /// Estimated minutes left at the current rate, if known.
+  int? get minutesLeft {
+    if (consumptionRateHourly <= 0) return null;
+    final units = paidBalance > 0 ? paidBalance : (freeRemaining ?? 0);
+    return (units / consumptionRateHourly * 60).floor();
+  }
+}
+
+int _int(Object? v) => switch (v) {
+  num n => n.toInt(),
+  String s => int.tryParse(s) ?? 0,
+  _ => 0,
+};

@@ -15,7 +15,7 @@ Document*. Spec gaps found during implementation are tracked in
 | 1 | Project setup, dependencies, folder structure | ✅ Done (Google Cloud / Firebase console steps are manual, see below) |
 | 2 | Auth Manager (`token_storage`, `auth_manager`, `auth_provider`, test screen) | ✅ Done. Auth gate A1–A6 passed on Android (2026-11-01) |
 | 3 | Drive Manager (`notebook`, `database`, `notebook_cache`, `drive_manager`, `drive_provider`, list + simple editor screens) | ✅ Done. Drive gate D1–D6 passed on Android (2026-11-01) |
-| 4 | Runtime Manager via the official Colab API | 🚧 Step 1: Colab access check (plan, runtime types, runtimes) — **waiting on device test** |
+| 4 | Runtime Manager via the official Colab API (`colab_api`, `jupyter_client`, `websocket_handler`, `runtime_manager`, `runtime_provider`, dashboard + Run buttons) | ✅ Step 1 (access) verified on device. Step 2 code + unit tests done — **waiting on the Runtime gate (R1–R6)** |
 | 5–8 | Notifications (ntfy.sh), UI, Windows, offline polish | ⏳ Not started |
 
 ## Prerequisites
@@ -103,7 +103,18 @@ flutter test
 persistence, auto-refresh, revoked grant, offline restore, sign-out) and the
 Windows loopback + PKCE flow against a fake Google token endpoint.
 
-### Drive gate (manual, Android)
+### Runtime gate (manual, Android)
+
+| # | Test | Pass condition |
+|---|---|---|
+| R1 | Open a notebook in Colab in a browser (runtime running), then open ColabMate → Colab | The runtime appears under "Your runtimes" |
+| R2 | Connect, then dashboard **Test: print('hello ColabMate') → Run** | `hello ColabMate` appears within ~0.5 s |
+| R3 | In a notebook, run a cell with `1/0` | Error traceback shown in red |
+| R4 | Run `import time`<br>`for i in range(5): print(i); time.sleep(1)` | Numbers appear one per second, not all at the end |
+| R5 | Stop the runtime (Colab web: Runtime → Disconnect and delete) | App shows "Disconnected" within ~15 s |
+| R6 | Watch the runtime card | GPU / RAM / disk bars update every ~5 s |
+
+### Drive gate (manual, Android) — passed
 
 | # | Test | Pass condition |
 |---|---|---|

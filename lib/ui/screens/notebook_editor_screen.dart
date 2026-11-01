@@ -3,7 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/drive/drive_manager.dart';
 import '../../models/notebook.dart';
+import '../../models/runtime_status.dart';
 import '../../providers/drive_provider.dart';
+import '../../providers/runtime_provider.dart';
+import '../widgets/output_viewer.dart';
+import 'dashboard_screen.dart';
 
 /// Notebook viewer with simple cell editing.
 ///
@@ -21,6 +25,7 @@ class NotebookEditorScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        actions: [_RuntimeChip(notebookId: id)],
       ),
       body: switch (notebook) {
         AsyncData(:final value) => _CellList(notebook: value),
@@ -84,10 +89,31 @@ class _CellList extends ConsumerWidget {
           _CellCard(
             index: i,
             cell: notebook.cells[i],
+            run: ref.watch(cellRunsProvider(notebook.id))[i],
             onEdit: () => _edit(context, ref, i, notebook.cells[i]),
+            onRun: () => _run(context, ref, i, notebook.cells[i]),
           ),
       ],
     );
+  }
+
+  void _run(BuildContext context, WidgetRef ref, int index, Cell cell) {
+    final started = ref
+        .read(cellRunsProvider(notebook.id).notifier)
+        .run(index, cell.source);
+    if (!started) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Connect to a Colab runtime first.'),
+          action: SnackBarAction(
+            label: 'Open Colab',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const DashboardScreen()),
+            ),
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _edit(
@@ -124,11 +150,18 @@ class _CellCard extends StatelessWidget {
     required this.index,
     required this.cell,
     required this.onEdit,
+    required this.onRun,
+    this.run,
   });
 
   final int index;
   final Cell cell;
   final VoidCallback onEdit;
+  final VoidCallback onRun;
+
+  /// Live output from running this cell in the app (replaces the saved
+  /// output preview).
+  final CellRun? run;
 
   @override
   Widget build(BuildContext context) {
@@ -154,12 +187,39 @@ class _CellCard extends StatelessWidget {
                       color: theme.colorScheme.primary,
                     ),
                   ),
+                  if (run?.done?.executionCount case final int n)
+                    Text(
+                      '  [$n]',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.outline,
+                      ),
+                    ),
                   const Spacer(),
                   Icon(
                     Icons.edit_outlined,
                     size: 16,
                     color: theme.colorScheme.outline,
                   ),
+                  if (isCode) ...[
+                    const SizedBox(width: 4),
+                    IconButton(
+                      key: ValueKey('run-$index'),
+                      tooltip: 'Run cell',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: run?.running ?? false ? null : onRun,
+                      icon: run?.running ?? false
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              Icons.play_circle_fill,
+                              color: run?.failed ?? false
+                                  ? theme.colorScheme.error
+                                  : theme.colorScheme.primary,
+                            ),
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 6),
@@ -169,7 +229,10 @@ class _CellCard extends StatelessWidget {
                     ? const TextStyle(fontFamily: 'monospace', fontSize: 13)
                     : theme.textTheme.bodyMedium,
               ),
-              if (output.isNotEmpty) ...[
+              if (run != null) ...[
+                const Divider(height: 20),
+                OutputViewer(run: run!),
+              ] else if (output.isNotEmpty) ...[
                 const Divider(height: 20),
                 Text(
                   output,
@@ -258,6 +321,51 @@ class _CellEditorSheetState extends State<_CellEditorSheet> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// App-bar chip showing the connected runtime + a stop (interrupt) button.
+class _RuntimeChip extends ConsumerWidget {
+  const _RuntimeChip({required this.notebookId});
+
+  final String notebookId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(sessionControllerProvider);
+    final anyRunning = ref
+        .watch(cellRunsProvider(notebookId))
+        .values
+        .any((r) => r.running);
+    final label = session.connected
+        ? '${session.runtime!.spec.label}${session.status == KernelStatus.busy ? ' · busy' : ''}'
+        : 'Not connected';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (anyRunning)
+          IconButton(
+            tooltip: 'Stop running cell',
+            icon: const Icon(Icons.stop_circle_outlined),
+            onPressed: () =>
+                ref.read(cellRunsProvider(notebookId).notifier).interrupt(),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: ActionChip(
+            avatar: Icon(
+              Icons.circle,
+              size: 10,
+              color: session.connected ? Colors.green : Colors.grey,
+            ),
+            label: Text(label),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const DashboardScreen()),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
