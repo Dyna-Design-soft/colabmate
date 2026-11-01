@@ -121,18 +121,21 @@ class DesktopLoopbackAuthBackend implements AuthBackend {
         continue;
       }
 
+      // Google echoes `state` on both success and error redirects. Ignore
+      // anything else (stray/replayed requests from other local processes or
+      // browser history) and keep waiting for the real redirect.
+      if (params['state'] != expectedState) {
+        request.response.statusCode = HttpStatus.badRequest;
+        await request.response.close();
+        continue;
+      }
+
       final error = params['error'];
-      final ok = error == null && params['state'] == expectedState;
-      await _respond(request, success: ok);
+      await _respond(request, success: error == null);
 
       if (error == 'access_denied') throw const SignInCancelledException();
       if (error != null) {
         throw AuthUnknownException('Google sign-in error: $error');
-      }
-      if (params['state'] != expectedState) {
-        throw const AuthUnknownException(
-          'OAuth state mismatch; sign-in aborted.',
-        );
       }
       return params['code']!;
     }

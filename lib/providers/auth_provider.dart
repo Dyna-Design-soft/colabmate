@@ -48,14 +48,20 @@ class AuthController extends AsyncNotifier<UserProfile?> {
       state = AsyncData(await _auth.signIn());
     } on SignInCancelledException {
       state = const AsyncData(null);
-    } on AuthException catch (e, st) {
+    } catch (e, st) {
+      // Any failure (incl. platform/socket errors) must leave the loading
+      // state, otherwise the login screen spins forever.
       state = AsyncError(e, st);
     }
   }
 
   Future<void> signOut() async {
     state = const AsyncLoading();
-    await _auth.signOut();
-    state = const AsyncData(null);
+    try {
+      await _auth.signOut();
+      state = const AsyncData(null);
+    } catch (e, st) {
+      state = AsyncError(e, st);
+    }
   }
 }

@@ -23,21 +23,30 @@ class GoogleSignInAuthBackend implements AuthBackend {
   final DateTime Function() _now;
   Future<void>? _init;
 
-  /// Play Services doesn't report the access token's lifetime. Google access
-  /// tokens last 60 minutes; assume slightly less so we refresh early.
-  static const Duration _assumedLifetime = Duration(minutes: 50);
+  /// Play Services doesn't report the token's lifetime (and may hand back a
+  /// cached, partly used token), so it is looked up with Google's tokeninfo.
+  /// If that lookup fails for network reasons, assume this conservative
+  /// lifetime so the token is refreshed early rather than late.
+  static const Duration _fallbackLifetime = Duration(minutes: 10);
 
   GoogleSignIn get _gsi => GoogleSignIn.instance;
 
-  Future<void> _ensureInitialized() {
+  Future<void> _ensureInitialized() async {
     if (_config.androidServerClientId.isEmpty) {
       throw const AuthConfigException(
         'GOOGLE_SERVER_CLIENT_ID is not set. See README "Google Cloud setup".',
       );
     }
-    return _init ??= _gsi.initialize(
+    final init = _init ??= _gsi.initialize(
       serverClientId: _config.androidServerClientId,
     );
+    try {
+      await init;
+    } catch (_) {
+      // Don't cache a failed initialize (e.g. Play Services updating).
+      if (identical(_init, init)) _init = null;
+      rethrow;
+    }
   }
 
   @override
@@ -48,7 +57,7 @@ class GoogleSignInAuthBackend implements AuthBackend {
     final authz =
         await client.authorizationForScopes(kGoogleScopes) ??
         await client.authorizeScopes(kGoogleScopes);
-    return _credentials(account, authz.accessToken);
+    return await _credentials(account, authz.accessToken);
   });
 
   @override
@@ -62,7 +71,7 @@ class GoogleSignInAuthBackend implements AuthBackend {
         await client.clearAuthorizationToken(accessToken: current.accessToken);
         final authz = await client.authorizationForScopes(kGoogleScopes);
         if (authz == null) throw const AuthExpiredException();
-        return _credentials(account, authz.accessToken);
+        return await _credentials(account, authz.accessToken);
       });
 
   @override
@@ -79,17 +88,28 @@ class GoogleSignInAuthBackend implements AuthBackend {
     }
   }
 
-  StoredCredentials _credentials(GoogleSignInAccount account, String token) =>
-      StoredCredentials(
-        accessToken: token,
-        expiresAt: _now().add(_assumedLifetime),
-        profile: UserProfile(
-          id: account.id,
-          email: account.email,
-          name: account.displayName,
-          photoUrl: account.photoUrl,
-        ),
-      );
+  Future<StoredCredentials> _credentials(
+    GoogleSignInAccount account,
+    String token,
+  ) async {
+    Duration lifetime;
+    try {
+      // null = already invalid → zero lifetime forces a refresh on first use.
+      lifetime = await _api.tokenLifetime(token) ?? Duration.zero;
+    } on AuthNetworkException {
+      lifetime = _fallbackLifetime;
+    }
+    return StoredCredentials(
+      accessToken: token,
+      expiresAt: _now().add(lifetime),
+      profile: UserProfile(
+        id: account.id,
+        email: account.email,
+        name: account.displayName,
+        photoUrl: account.photoUrl,
+      ),
+    );
+  }
 
   Future<T> _guard<T>(Future<T> Function() body) async {
     try {

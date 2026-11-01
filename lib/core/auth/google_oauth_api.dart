@@ -18,7 +18,17 @@ class TokenResponse {
 
 /// Thin wrapper over Google's OAuth 2.0 / OpenID Connect REST endpoints.
 class GoogleOAuthApi {
-  GoogleOAuthApi([Dio? dio]) : _dio = dio ?? Dio();
+  GoogleOAuthApi([Dio? dio])
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              // Fail fast on bad networks so startup falls back to offline.
+              connectTimeout: const Duration(seconds: 10),
+              sendTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 15),
+            ),
+          );
 
   static const String authorizationEndpoint =
       'https://accounts.google.com/o/oauth2/v2/auth';
@@ -77,6 +87,8 @@ class GoogleOAuthApi {
       );
     } on DioException catch (e) {
       throw _map(e);
+    } on TypeError {
+      throw const AuthUnknownException('Unexpected response from Google.');
     }
   }
 
@@ -95,23 +107,34 @@ class GoogleOAuthApi {
       );
     } on DioException catch (e) {
       throw _map(e);
+    } on TypeError {
+      throw const AuthUnknownException('Unexpected response from Google.');
+    }
+  }
+
+  /// Remaining lifetime of [accessToken] according to Google, or null if
+  /// Google no longer accepts it. Throws [AuthNetworkException] if offline.
+  Future<Duration?> tokenLifetime(String accessToken) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        tokenInfoEndpoint,
+        queryParameters: {'access_token': accessToken},
+      );
+      final expiresIn = res.data?['expires_in'];
+      final seconds = expiresIn is num
+          ? expiresIn.toInt()
+          : int.tryParse('$expiresIn') ?? 0;
+      return Duration(seconds: seconds);
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      if (status == 400 || status == 401) return null;
+      throw _map(e);
     }
   }
 
   /// True if Google still accepts [accessToken].
-  Future<bool> isAccessTokenValid(String accessToken) async {
-    try {
-      await _dio.get<Object>(
-        tokenInfoEndpoint,
-        queryParameters: {'access_token': accessToken},
-      );
-      return true;
-    } on DioException catch (e) {
-      final status = e.response?.statusCode;
-      if (status == 400 || status == 401) return false;
-      throw _map(e);
-    }
-  }
+  Future<bool> isAccessTokenValid(String accessToken) async =>
+      await tokenLifetime(accessToken) != null;
 
   /// Revokes a refresh or access token. Errors are swallowed: revocation is
   /// best effort and local credentials are cleared regardless.
@@ -132,14 +155,15 @@ class GoogleOAuthApi {
     if (res == null) return const AuthNetworkException();
     final data = res.data;
     final error = data is Map ? data['error'] : null;
-    if (error == 'invalid_grant' || res.statusCode == 401) {
-      return const AuthExpiredException();
-    }
+    // Check client errors first: Google returns 401 for invalid_client.
     if (error == 'invalid_client' || error == 'unauthorized_client') {
       return AuthConfigException(
         'Google rejected the OAuth client ($error). Check the client ID '
         'and secret passed via --dart-define.',
       );
+    }
+    if (error == 'invalid_grant' || res.statusCode == 401) {
+      return const AuthExpiredException();
     }
     return AuthUnknownException(
       'Google OAuth error ${res.statusCode}: ${error ?? data}',

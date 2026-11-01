@@ -10,6 +10,7 @@ import 'package:colabmate/core/auth/desktop_loopback_auth_backend.dart';
 import 'package:colabmate/core/auth/google_oauth_api.dart';
 import 'package:colabmate/core/auth/token_storage.dart';
 import 'package:colabmate/models/user_profile.dart';
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,8 +20,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 class MemoryStore implements SecureKeyValueStore {
   final Map<String, String> data = {};
+  Object? readError;
   @override
-  Future<String?> read(String key) async => data[key];
+  Future<String?> read(String key) async {
+    if (readError != null) throw readError!;
+    return data[key];
+  }
+
   @override
   Future<void> write(String key, String value) async => data[key] = value;
   @override
@@ -40,6 +46,7 @@ class FakeBackend implements AuthBackend {
 
   int signInCalls = 0, refreshCalls = 0, signOutCalls = 0;
   Object? signInError;
+  Object? signOutError;
   Object? refreshError;
   bool tokenValid = true;
   Object? validateError;
@@ -75,7 +82,10 @@ class FakeBackend implements AuthBackend {
   }
 
   @override
-  Future<void> signOut(StoredCredentials? current) async => signOutCalls++;
+  Future<void> signOut(StoredCredentials? current) async {
+    signOutCalls++;
+    if (signOutError != null) throw signOutError!;
+  }
 }
 
 void main() {
@@ -138,11 +148,8 @@ void main() {
     );
 
     test('signOut still clears locally if backend sign-out fails', () async {
-      final auth = AuthManager(
-        backend: _ThrowingSignOutBackend(backend),
-        storage: TokenStorage(store),
-        clock: () => now,
-      );
+      backend.signOutError = const AuthNetworkException();
+      final auth = newManager();
       await auth.signIn();
       await auth.signOut();
       expect(store.data, isEmpty);
@@ -216,6 +223,45 @@ void main() {
       expect(await restarted.isSignedIn(), isTrue);
     });
 
+    test('refresh finishing after signOut does not restore session', () async {
+      final auth = newManager();
+      await auth.signIn();
+      now = now.add(const Duration(hours: 2));
+      backend.refreshGate = Completer<void>();
+      final pending = auth.getAccessToken();
+      await auth.signOut();
+      backend.refreshGate!.complete();
+      await expectLater(pending, throwsA(isA<NotSignedInException>()));
+      expect(await auth.isSignedIn(), isFalse);
+      expect(store.data, isEmpty);
+      expect(await newManager().isSignedIn(), isFalse);
+    });
+
+    test(
+      'refresh finishing after a new signIn keeps the new session',
+      () async {
+        final auth = newManager();
+        await auth.signIn();
+        now = now.add(const Duration(hours: 2));
+        backend.refreshGate = Completer<void>();
+        final pending = auth.getAccessToken();
+        await auth.signIn(); // new session: token-0, fresh expiry
+        backend.refreshGate!.complete();
+        expect(await pending, 'token-0');
+        expect(await newManager().getAccessToken(), 'token-0');
+      },
+    );
+
+    test('failed secure-storage read is not cached forever', () async {
+      store.readError = Exception('keystore unavailable');
+      final auth = newManager();
+      // TokenStorage treats an unreadable store as "no credentials".
+      expect(await auth.isSignedIn(), isFalse);
+      store.readError = null;
+      expect(await auth.signIn(), _user);
+      expect(await auth.isSignedIn(), isTrue);
+    });
+
     test('unreadable stored credentials are discarded', () async {
       store.data['colabmate.credentials.v1'] = '{not json';
       final auth = newManager();
@@ -271,7 +317,14 @@ void main() {
       expect(tokenReq['code'], 'auth-code');
       expect(tokenReq['redirect_uri'], q['redirect_uri']);
       // PKCE: challenge = BASE64URL(SHA256(verifier)) without padding.
-      expect(tokenReq['code_verifier'], hasLength(64));
+      final verifier = tokenReq['code_verifier']!;
+      expect(verifier, hasLength(64));
+      expect(
+        q['code_challenge'],
+        base64UrlEncode(sha256.convert(ascii.encode(verifier)).bytes)
+            .replaceAll('=', ''),
+      );
+      expect(q['code_challenge'], isNot(contains('=')));
 
       expect(creds.accessToken, 'access-1');
       expect(creds.refreshToken, 'refresh-1');
@@ -288,8 +341,12 @@ void main() {
           unawaited(
             HttpClient()
                 .getUrl(
-                  Uri.parse(url.queryParameters['redirect_uri']!)
-                      .replace(queryParameters: {'error': 'access_denied'}),
+                  Uri.parse(url.queryParameters['redirect_uri']!).replace(
+                    queryParameters: {
+                      'error': 'access_denied',
+                      'state': url.queryParameters['state']!,
+                    },
+                  ),
                 )
                 .then((r) => r.close())
                 .then((r) => r.drain<void>()),
@@ -300,6 +357,56 @@ void main() {
       await expectLater(
         backend.signIn(),
         throwsA(isA<SignInCancelledException>()),
+      );
+    });
+
+    test('stray local requests with wrong state are ignored', () async {
+      final google = _FakeGoogle();
+      final backend = DesktopLoopbackAuthBackend(
+        config: config,
+        api: GoogleOAuthApi(google.dio),
+        clock: () => now,
+        openUrl: (url) async {
+          final q = url.queryParameters;
+          final redirect = Uri.parse(q['redirect_uri']!);
+          Future<int> hit(Map<String, String> params) async {
+            final res = await (await HttpClient().getUrl(
+              redirect.replace(queryParameters: params),
+            )).close();
+            await res.drain<void>();
+            return res.statusCode;
+          }
+
+          unawaited(() async {
+            // Attacker / stale redirects without the right state.
+            expect(await hit({'error': 'access_denied'}), 400);
+            expect(await hit({'code': 'evil', 'state': 'bogus'}), 400);
+            // The real redirect still completes sign-in.
+            await hit({'code': 'auth-code', 'state': q['state']!});
+          }());
+          return true;
+        },
+      );
+      final creds = await backend.signIn();
+      expect(creds.accessToken, 'access-1');
+      expect(google.requests.single['code'], 'auth-code');
+    });
+
+    test('invalid_client (HTTP 401) is a config error, not expiry', () async {
+      final google = _FakeGoogle()..badClient = true;
+      final backend = DesktopLoopbackAuthBackend(
+        config: config,
+        api: GoogleOAuthApi(google.dio),
+      );
+      final current = StoredCredentials(
+        accessToken: 'old',
+        expiresAt: now,
+        refreshToken: 'refresh-1',
+        profile: _user,
+      );
+      await expectLater(
+        backend.refresh(current),
+        throwsA(isA<AuthConfigException>()),
       );
     });
 
@@ -334,28 +441,20 @@ void main() {
       expect(refreshed.refreshToken, 'refresh-1');
       expect(google.requests.last['grant_type'], 'refresh_token');
 
+      expect(
+        await GoogleOAuthApi(google.dio).tokenLifetime('old'),
+        const Duration(seconds: 100),
+      );
+
       google.revoked = true;
       await expectLater(
         backend.refresh(current),
         throwsA(isA<AuthExpiredException>()),
       );
       expect(await backend.isAccessTokenValid('old'), isFalse);
+      expect(await GoogleOAuthApi(google.dio).tokenLifetime('old'), isNull);
     });
   });
-}
-
-class _ThrowingSignOutBackend implements AuthBackend {
-  _ThrowingSignOutBackend(this._inner);
-  final FakeBackend _inner;
-  @override
-  Future<StoredCredentials> signIn() => _inner.signIn();
-  @override
-  Future<StoredCredentials> refresh(StoredCredentials c) => _inner.refresh(c);
-  @override
-  Future<bool> isAccessTokenValid(String t) => _inner.isAccessTokenValid(t);
-  @override
-  Future<void> signOut(StoredCredentials? c) async =>
-      throw const AuthNetworkException();
 }
 
 /// Fakes Google's token/userinfo/tokeninfo endpoints at the Dio adapter level.
@@ -367,6 +466,7 @@ class _FakeGoogle implements HttpClientAdapter {
   final Dio dio = Dio();
   final List<Map<String, String>> requests = [];
   bool revoked = false;
+  bool badClient = false;
   int _issued = 0;
 
   @override
@@ -380,11 +480,13 @@ class _FakeGoogle implements HttpClientAdapter {
     if (url.startsWith(GoogleOAuthApi.tokenInfoEndpoint)) {
       return revoked
           ? _json(400, {'error': 'invalid_token'})
-          : _json(200, {'expires_in': 100});
+          // Google returns expires_in as a string here.
+          : _json(200, {'expires_in': '100'});
     }
     if (url.startsWith(GoogleOAuthApi.tokenEndpoint)) {
       final body = options.data as Map<String, dynamic>;
       requests.add(body.map((k, v) => MapEntry(k, '$v')));
+      if (badClient) return _json(401, {'error': 'invalid_client'});
       if (revoked) return _json(400, {'error': 'invalid_grant'});
       _issued++;
       return _json(200, {

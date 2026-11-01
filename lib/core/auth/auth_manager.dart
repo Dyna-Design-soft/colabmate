@@ -30,10 +30,17 @@ class AuthManager {
   Future<void>? _loading;
   Future<StoredCredentials>? _refreshing;
 
+  /// Bumped whenever a session starts or ends, so a refresh that was in
+  /// flight across a sign-out / sign-in never writes stale credentials back.
+  int _generation = 0;
+
   /// Interactive Google sign-in. Throws [SignInCancelledException] if the user
   /// cancels, [AuthNetworkException] on network errors.
   Future<UserProfile> signIn() async {
     final credentials = await _backend.signIn();
+    await _ensureLoaded();
+    _generation++;
+    _refreshing = null;
     await _save(credentials);
     return credentials.profile;
   }
@@ -47,7 +54,7 @@ class AuthManager {
     } catch (e) {
       debugPrint('AuthManager: backend sign-out failed ($e); clearing anyway');
     }
-    await _clear();
+    await _endSession();
   }
 
   /// Returns a valid access token, refreshing it first if it is about to
@@ -110,32 +117,61 @@ class AuthManager {
 
   Future<StoredCredentials> _refresh(StoredCredentials current) {
     // Concurrent callers share one in-flight refresh.
-    return _refreshing ??= () async {
+    final inFlight = _refreshing;
+    if (inFlight != null) return inFlight;
+
+    final generation = _generation;
+    final completer = Completer<StoredCredentials>();
+    _refreshing = completer.future;
+
+    () async {
       try {
         final refreshed = await _backend.refresh(current);
+        if (generation != _generation) {
+          // Signed out or switched accounts meanwhile: discard the result.
+          completer.complete(_currentOrThrow());
+          return;
+        }
         await _save(refreshed);
-        return refreshed;
-      } on AuthExpiredException {
-        await _clear();
-        rethrow;
+        completer.complete(refreshed);
+      } on AuthExpiredException catch (e, st) {
+        if (generation == _generation) await _endSession();
+        completer.completeError(e, st);
+      } catch (e, st) {
+        completer.completeError(e, st);
       } finally {
-        _refreshing = null;
+        if (identical(_refreshing, completer.future)) _refreshing = null;
       }
     }();
+
+    return completer.future;
   }
 
-  Future<void> _ensureLoaded() =>
-      _loading ??= _storage.read().then((c) => _credentials ??= c);
+  StoredCredentials _currentOrThrow() =>
+      _credentials ?? (throw const NotSignedInException());
+
+  Future<void> _ensureLoaded() {
+    final loading = _loading ??= _storage.read().then(
+      (c) => _credentials ??= c,
+    );
+    // Don't cache a failed read forever; retry on the next call.
+    return loading.catchError((Object e) {
+      if (identical(_loading, loading)) _loading = null;
+      throw e;
+    });
+  }
 
   Future<void> _save(StoredCredentials credentials) async {
     _credentials = credentials;
-    _loading ??= Future<void>.value();
+    _loading = Future<void>.value();
     await _storage.write(credentials);
   }
 
-  Future<void> _clear() async {
+  Future<void> _endSession() async {
+    _generation++;
+    _refreshing = null;
     _credentials = null;
-    _loading ??= Future<void>.value();
+    _loading = Future<void>.value();
     await _storage.clear();
   }
 }

@@ -92,7 +92,17 @@ class TokenStorage {
   final SecureKeyValueStore _store;
 
   Future<StoredCredentials?> read() async {
-    final raw = await _store.read(_key);
+    final String? raw;
+    try {
+      raw = await _store.read(_key);
+    } catch (e) {
+      // E.g. Android Keystore was reset and the entry can't be decrypted.
+      debugPrint('TokenStorage: secure storage read failed ($e)');
+      try {
+        await clear();
+      } catch (_) {}
+      return null;
+    }
     if (raw == null) return null;
     try {
       return StoredCredentials.fromJson(
