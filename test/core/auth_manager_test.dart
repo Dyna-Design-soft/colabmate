@@ -56,6 +56,7 @@ class FakeBackend implements AuthBackend {
   bool extraGranted = false;
   bool userAcceptsPrompt = true;
   int scopedCalls = 0;
+  Completer<void>? scopedGate;
   final List<String?> staleTokens = [];
 
   @override
@@ -66,6 +67,7 @@ class FakeBackend implements AuthBackend {
   }) async {
     scopedCalls++;
     staleTokens.add(stale);
+    await scopedGate?.future;
     if (!extraGranted && interactive && userAcceptsPrompt) extraGranted = true;
     if (!extraGranted) return null;
     return ScopedToken(
@@ -307,6 +309,22 @@ void main() {
         expect(backend.scopedCalls, 1);
         now = now.add(const Duration(minutes: 56));
         expect(await auth.getScopedToken(colab), 'scoped-2');
+      });
+
+      test('parallel requests share one platform call', () async {
+        final auth = newManager();
+        await auth.signIn();
+        await auth.getScopedToken(colab, interactive: true);
+        now = now.add(const Duration(hours: 2)); // cached token expired
+        backend.scopedGate = Completer<void>();
+        final calls = [
+          auth.getScopedToken(colab),
+          auth.getScopedToken(colab),
+          auth.getScopedToken(colab),
+        ];
+        backend.scopedGate!.complete();
+        expect((await Future.wait(calls)).toSet(), {'scoped-2'});
+        expect(backend.scopedCalls, 2, reason: '1 grant + 1 shared refresh');
       });
 
       test('forceRefresh passes the stale token to discard', () async {

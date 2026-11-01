@@ -30,6 +30,10 @@ class AuthManager {
 
   /// In-memory tokens for extra scopes, keyed by the sorted scope list.
   final Map<String, ScopedToken> _scoped = {};
+
+  /// In-flight scoped-token requests, so parallel callers share one
+  /// platform call (the Android plugin can only track one at a time).
+  final Map<String, Future<String>> _scopedInFlight = {};
   Future<void>? _loading;
   Future<StoredCredentials>? _refreshing;
 
@@ -92,15 +96,27 @@ class AuthManager {
         _now().add(kTokenRefreshMargin).isBefore(cached.expiresAt)) {
       return cached.token;
     }
+    final inFlight = _scopedInFlight[key];
+    // Join a running request unless this one must prompt and that one won't.
+    if (inFlight != null && !interactive) return inFlight;
+
     final generation = _generation;
-    final fresh = await _backend.scopedToken(
-      scopes,
-      interactive: interactive,
-      stale: cached?.token,
-    );
-    if (fresh == null) throw const ScopeNotGrantedException();
-    if (generation == _generation) _scoped[key] = fresh;
-    return fresh.token;
+    final request = () async {
+      final fresh = await _backend.scopedToken(
+        scopes,
+        interactive: interactive,
+        stale: forceRefresh ? cached?.token : null,
+      );
+      if (fresh == null) throw const ScopeNotGrantedException();
+      if (generation == _generation) _scoped[key] = fresh;
+      return fresh.token;
+    }();
+    _scopedInFlight[key] = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_scopedInFlight[key], request)) _scopedInFlight.remove(key);
+    }
   }
 
   /// Forces a token refresh, e.g. after an API call returned 401.

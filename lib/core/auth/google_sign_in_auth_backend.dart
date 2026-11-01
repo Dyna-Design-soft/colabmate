@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../models/user_profile.dart';
@@ -28,6 +30,10 @@ class GoogleSignInAuthBackend implements AuthBackend {
   /// If that lookup fails for network reasons, assume this conservative
   /// lifetime so the token is refreshed early rather than late.
   static const Duration _fallbackLifetime = Duration(minutes: 10);
+
+  /// Upper bound for non-interactive Play Services calls, so a call that
+  /// never answers shows an error instead of an endless spinner.
+  static const Duration _platformTimeout = Duration(seconds: 30);
 
   GoogleSignIn get _gsi => GoogleSignIn.instance;
 
@@ -81,16 +87,30 @@ class GoogleSignInAuthBackend implements AuthBackend {
     String? stale,
   }) => _guard(() async {
     await _ensureInitialized();
-    final account = await _gsi.attemptLightweightAuthentication();
-    if (account == null) throw const AuthExpiredException();
-    final client = account.authorizationClient;
-    if (stale != null) await client.clearAuthorizationToken(accessToken: stale);
+    // Authorization only — no need to re-run the sign-in (Credential
+    // Manager) step, which can show UI and only handles one call at a time.
+    final client = _gsi.authorizationClient;
+    if (stale != null) {
+      await client
+          .clearAuthorizationToken(accessToken: stale)
+          .timeout(_platformTimeout);
+    }
     final authz =
-        await client.authorizationForScopes(scopes) ??
-        (interactive ? await client.authorizeScopes(scopes) : null);
+        await client.authorizationForScopes(scopes).timeout(_platformTimeout) ??
+        (interactive
+            // The user may take a while on Google's consent screen.
+            ? await client
+                  .authorizeScopes(scopes)
+                  .timeout(const Duration(minutes: 5))
+            : null);
     if (authz == null) return null;
-    final creds = await _credentials(account, authz.accessToken);
-    return ScopedToken(creds.accessToken, creds.expiresAt);
+    Duration lifetime;
+    try {
+      lifetime = await _api.tokenLifetime(authz.accessToken) ?? Duration.zero;
+    } on AuthNetworkException {
+      lifetime = _fallbackLifetime;
+    }
+    return ScopedToken(authz.accessToken, _now().add(lifetime));
   });
 
   @override
@@ -133,6 +153,10 @@ class GoogleSignInAuthBackend implements AuthBackend {
   Future<T> _guard<T>(Future<T> Function() body) async {
     try {
       return await body();
+    } on TimeoutException {
+      throw const AuthUnknownException(
+        'Google Play services did not respond. Please try again.',
+      );
     } on GoogleSignInException catch (e) {
       switch (e.code) {
         case GoogleSignInExceptionCode.canceled:
