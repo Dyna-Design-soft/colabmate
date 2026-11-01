@@ -13,8 +13,8 @@ Document*. Spec gaps found during implementation are tracked in
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Project setup, dependencies, folder structure | ✅ Done (Google Cloud / Firebase console steps are manual, see below) |
-| 2 | Auth Manager (`token_storage`, `auth_manager`, `auth_provider`, test screen) | ✅ Code + unit tests done. **Waiting on the manual Auth gate test (A1–A6) on Android** |
-| 3 | Drive Manager | ⏳ Not started (blocked by the Auth gate) |
+| 2 | Auth Manager (`token_storage`, `auth_manager`, `auth_provider`, test screen) | ✅ Done. Auth gate A1–A6 passed on Android (2026-11-01) |
+| 3 | Drive Manager (`notebook`, `database`, `notebook_cache`, `drive_manager`, `drive_provider`, list + simple editor screens) | ✅ Code + unit tests done. **Waiting on the manual Drive gate test (D1–D6)** |
 | 4–8 | Runtime, notifications, UI, offline sync | ⏳ Not started |
 
 ## Prerequisites
@@ -102,7 +102,18 @@ flutter test
 persistence, auto-refresh, revoked grant, offline restore, sign-out) and the
 Windows loopback + PKCE flow against a fake Google token endpoint.
 
-### Auth gate (manual, on each platform)
+### Drive gate (manual, Android)
+
+| # | Test | Pass condition |
+|---|---|---|
+| D1 | Sign in, notebook list opens | At least one .ipynb from Drive is listed |
+| D2 | Tap a notebook | Cells are visible |
+| D3 | Airplane mode on, reopen the app, open that notebook | It loads from the device cache |
+| D4 | Still offline: tap a cell, change it, **Save** | "Saved offline" + upload banner / cloud icon shown |
+| D5 | Airplane mode off | The edit uploads automatically (banner/icon disappears) |
+| D6 | Open the notebook in Colab / Drive web | The change is there |
+
+### Auth gate (manual, on each platform) — passed
 
 | # | Test | Pass condition |
 |---|---|---|

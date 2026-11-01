@@ -2,13 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_exceptions.dart';
-import '../../models/user_profile.dart';
 import '../../providers/auth_provider.dart';
 
-/// Google sign-in screen.
-///
-/// Phase 2: also acts as the minimal auth test screen — after sign-in it shows
-/// the user's name + photo and a Sign out button (gate tests A1–A6).
+/// Google sign-in screen. Shown while signed out (and while signing in/out);
+/// once signed in, [ColabMateApp] switches to the notebook list.
 class LoginScreen extends ConsumerWidget {
   const LoginScreen({super.key});
 
@@ -24,10 +21,6 @@ class LoginScreen extends ConsumerWidget {
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: switch (auth) {
-              AsyncData(value: final UserProfile user) => _SignedIn(
-                user: user,
-                onSignOut: controller.signOut,
-              ),
               AsyncLoading() => const CircularProgressIndicator(),
               AsyncError(:final error) => _SignedOut(
                 onSignIn: controller.signIn,
@@ -78,46 +71,6 @@ class _SignedOut extends StatelessWidget {
             style: TextStyle(color: theme.colorScheme.error),
           ),
         ],
-      ],
-    );
-  }
-}
-
-class _SignedIn extends StatelessWidget {
-  const _SignedIn({required this.user, required this.onSignOut});
-
-  final UserProfile user;
-  final VoidCallback onSignOut;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final photo = user.photoUrl;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        CircleAvatar(
-          radius: 40,
-          foregroundImage: photo == null ? null : NetworkImage(photo),
-          child: Text(
-            user.displayName.characters.first.toUpperCase(),
-            style: theme.textTheme.headlineMedium,
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          user.displayName,
-          key: const Key('userName'),
-          style: theme.textTheme.titleLarge,
-        ),
-        Text(user.email, style: theme.textTheme.bodyMedium),
-        const SizedBox(height: 32),
-        OutlinedButton.icon(
-          key: const Key('signOutButton'),
-          onPressed: onSignOut,
-          icon: const Icon(Icons.logout),
-          label: const Text('Sign out'),
-        ),
       ],
     );
   }

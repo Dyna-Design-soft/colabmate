@@ -36,6 +36,24 @@ expires refresh tokens after **7 days**, so you will need to sign in again
 about once a week. Publishing to Production would need Google's
 restricted-scope verification. That is not worth it for a single-user app.
 
+## Phase 3 implementation notes
+
+* **Pending sync** is a `pending_sync` column on the cached notebook row
+  (spec §4.2), so the offline→sync flow (D4–D6) already works in Phase 3.
+  A separate `sync_queue_table` (Phase 8, step 39) is not needed for
+  whole-file last-write-wins sync; revisit only if per-cell sync is wanted.
+* Sync on reconnect (`connectivity_plus`, Phase 8 steps 37–38) is wired up now
+  for the same reason.
+* `listNotebooks()` returns `NotebookListing` (list + `fromCache` flag) so the
+  UI can show the offline banner.
+* Uploads keep the file's Drive MIME type
+  (`application/vnd.google.colaboratory`), so Colab still opens edited files.
+* An edit made while an upload is running stays pending (the upload only
+  clears the flag if the cached content is unchanged).
+* Signing out clears the notebook cache (after a warning if there are
+  unsynced edits), so another account never sees cached notebooks.
+* The Phase 3 editor is a plain text editor; Monaco arrives in Phase 6.
+
 ## Open: decide before Phase 4 (Runtime Manager)
 
 ### 4. Strategy A (bridge cell) cannot work as written. **Decision needed**
