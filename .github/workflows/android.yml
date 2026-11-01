@@ -15,6 +15,8 @@ jobs:
     name: Test and build APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: write # publish GitHub Releases
 
     steps:
       - uses: actions/checkout@v4
@@ -73,20 +75,42 @@ jobs:
           jq -n --arg id "$GOOGLE_SERVER_CLIENT_ID" \
             '{GOOGLE_SERVER_CLIENT_ID: $id}' > config/oauth.json
 
+      # build-number = run number, so every APK installs over the previous one.
       - name: Build release APK
-        run: flutter build apk --release --dart-define-from-file=config/oauth.json
+        run: >
+          flutter build apk --release
+          --build-number=${{ github.run_number }}
+          --dart-define-from-file=config/oauth.json
 
       - name: Rename APK
+        id: apk
         run: |
-          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
-          mv build/app/outputs/flutter-apk/app-release.apk \
-             "build/app/outputs/flutter-apk/colabmate-${VERSION}-${GITHUB_SHA::7}.apk"
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          NAME="colabmate-v${VERSION}-build${{ github.run_number }}.apk"
+          mv build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/$NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: colabmate-apk
           path: build/app/outputs/flutter-apk/colabmate-*.apk
           retention-days: 30
+
+      # Publish the plain .apk (not zipped) on the Releases page.
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.apk.outputs.version }}-build${{ github.run_number }}
+          name: ColabMate v${{ steps.apk.outputs.version }} (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: build/app/outputs/flutter-apk/${{ steps.apk.outputs.name }}
+          body: |
+            **Download:** tap `${{ steps.apk.outputs.name }}` below and install it on your Android phone (allow "Install unknown apps").
+
+            Branch: `${{ github.ref_name }}` · Commit: ${{ github.sha }}
 
       - name: Remove signing material
         if: always()
