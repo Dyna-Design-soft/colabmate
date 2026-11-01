@@ -33,8 +33,14 @@ final authManagerProvider = Provider<AuthManager>(
 
 /// Current signed-in user (`null` = signed out). Errors from sign-in are
 /// surfaced as `AsyncError`; a cancelled sign-in simply returns to signed-out.
+///
+/// Automatic retry is disabled: a failed session restore should show the
+/// sign-in screen with the error, not spin while Riverpod retries.
 final authControllerProvider =
-    AsyncNotifierProvider<AuthController, UserProfile?>(AuthController.new);
+    AsyncNotifierProvider<AuthController, UserProfile?>(
+      AuthController.new,
+      retry: (_, _) => null,
+    );
 
 class AuthController extends AsyncNotifier<UserProfile?> {
   AuthManager get _auth => ref.read(authManagerProvider);
