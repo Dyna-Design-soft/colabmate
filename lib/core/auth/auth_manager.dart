@@ -27,6 +27,9 @@ class AuthManager {
   final DateTime Function() _now;
 
   StoredCredentials? _credentials;
+
+  /// In-memory tokens for extra scopes, keyed by the sorted scope list.
+  final Map<String, ScopedToken> _scoped = {};
   Future<void>? _loading;
   Future<StoredCredentials>? _refreshing;
 
@@ -41,6 +44,7 @@ class AuthManager {
     await _ensureLoaded();
     _generation++;
     _refreshing = null;
+    _scoped.clear();
     await _save(credentials);
     return credentials.profile;
   }
@@ -69,6 +73,34 @@ class AuthManager {
       return current.accessToken;
     }
     return (await _refresh(current)).accessToken;
+  }
+
+  /// Access token covering extra [scopes] (e.g. Colab), requested on demand.
+  /// Throws [ScopeNotGrantedException] if not granted and not [interactive].
+  /// [forceRefresh] discards the cached token (after a 401).
+  Future<String> getScopedToken(
+    List<String> scopes, {
+    bool interactive = false,
+    bool forceRefresh = false,
+  }) async {
+    await _ensureLoaded();
+    if (_credentials == null) throw const NotSignedInException();
+    final key = ([...scopes]..sort()).join(' ');
+    final cached = _scoped[key];
+    if (!forceRefresh &&
+        cached != null &&
+        _now().add(kTokenRefreshMargin).isBefore(cached.expiresAt)) {
+      return cached.token;
+    }
+    final generation = _generation;
+    final fresh = await _backend.scopedToken(
+      scopes,
+      interactive: interactive,
+      stale: cached?.token,
+    );
+    if (fresh == null) throw const ScopeNotGrantedException();
+    if (generation == _generation) _scoped[key] = fresh;
+    return fresh.token;
   }
 
   /// Forces a token refresh, e.g. after an API call returned 401.
@@ -169,6 +201,7 @@ class AuthManager {
 
   Future<void> _endSession() async {
     _generation++;
+    _scoped.clear();
     _refreshing = null;
     _credentials = null;
     _loading = Future<void>.value();

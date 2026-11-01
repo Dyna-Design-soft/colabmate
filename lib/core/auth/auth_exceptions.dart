@@ -30,6 +30,13 @@ class AuthNetworkException extends AuthException {
   const AuthNetworkException([super.message = 'Network error during sign-in']);
 }
 
+/// An extra permission (e.g. Colab) hasn't been granted yet.
+class ScopeNotGrantedException extends AuthException {
+  const ScopeNotGrantedException([
+    super.message = 'This permission has not been granted yet.',
+  ]);
+}
+
 /// Missing or invalid OAuth client configuration (see README).
 class AuthConfigException extends AuthException {
   const AuthConfigException(super.message);

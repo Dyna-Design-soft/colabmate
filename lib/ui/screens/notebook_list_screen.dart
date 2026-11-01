@@ -5,6 +5,7 @@ import '../../core/drive/drive_manager.dart';
 import '../../models/notebook.dart';
 import '../../models/user_profile.dart';
 import '../../providers/drive_provider.dart';
+import 'dashboard_screen.dart';
 import 'notebook_editor_screen.dart';
 
 /// Lists the user's .ipynb notebooks from Google Drive (Phase 3, FR-02).
@@ -40,6 +41,14 @@ class NotebookListScreen extends ConsumerWidget {
                 child: Icon(Icons.cloud_off_outlined),
               ),
             ),
+          IconButton(
+            key: const Key('openColab'),
+            tooltip: 'Colab runtimes',
+            icon: const Icon(Icons.memory),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const DashboardScreen()),
+            ),
+          ),
           _AccountMenu(user: user),
         ],
       ),

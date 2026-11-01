@@ -48,6 +48,12 @@ class _Backend implements AuthBackend {
   @override
   Future<bool> isAccessTokenValid(String t) async => true;
   @override
+  Future<ScopedToken?> scopedToken(
+    List<String> scopes, {
+    required bool interactive,
+    String? stale,
+  }) async => null;
+  @override
   Future<void> signOut(StoredCredentials? c) async {}
 }
 

@@ -1,5 +1,12 @@
 import 'token_storage.dart';
 
+/// Access token for extra scopes requested after sign-in (e.g. Colab).
+class ScopedToken {
+  const ScopedToken(this.token, this.expiresAt);
+  final String token;
+  final DateTime expiresAt;
+}
+
 /// Platform-specific OAuth 2.0 implementation used by [AuthManager].
 ///
 /// * Android → `GoogleSignInAuthBackend` (Google Play Services / Credential
@@ -22,6 +29,15 @@ abstract interface class AuthBackend {
   /// revoked from the Google account settings). Throws
   /// [AuthNetworkException] when Google can't be reached.
   Future<bool> isAccessTokenValid(String accessToken);
+
+  /// Access token that also covers [scopes] (incremental authorization).
+  /// If they aren't granted yet: asks the user when [interactive], otherwise
+  /// returns null. [stale] is a previous token to discard (after a 401).
+  Future<ScopedToken?> scopedToken(
+    List<String> scopes, {
+    required bool interactive,
+    String? stale,
+  });
 
   /// Ends the session with the platform SDK / revokes the grant (best effort).
   Future<void> signOut(StoredCredentials? current);

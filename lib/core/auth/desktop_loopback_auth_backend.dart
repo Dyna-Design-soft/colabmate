@@ -185,6 +185,15 @@ class DesktopLoopbackAuthBackend implements AuthBackend {
   }
 
   @override
+  Future<ScopedToken?> scopedToken(
+    List<String> scopes, {
+    required bool interactive,
+    String? stale,
+  }) async => throw const AuthConfigException(
+    'Colab access is not available on Windows yet.',
+  );
+
+  @override
   Future<bool> isAccessTokenValid(String accessToken) =>
       _api.isAccessTokenValid(accessToken);
 

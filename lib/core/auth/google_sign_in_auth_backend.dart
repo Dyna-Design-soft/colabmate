@@ -75,6 +75,25 @@ class GoogleSignInAuthBackend implements AuthBackend {
       });
 
   @override
+  Future<ScopedToken?> scopedToken(
+    List<String> scopes, {
+    required bool interactive,
+    String? stale,
+  }) => _guard(() async {
+    await _ensureInitialized();
+    final account = await _gsi.attemptLightweightAuthentication();
+    if (account == null) throw const AuthExpiredException();
+    final client = account.authorizationClient;
+    if (stale != null) await client.clearAuthorizationToken(accessToken: stale);
+    final authz =
+        await client.authorizationForScopes(scopes) ??
+        (interactive ? await client.authorizeScopes(scopes) : null);
+    if (authz == null) return null;
+    final creds = await _credentials(account, authz.accessToken);
+    return ScopedToken(creds.accessToken, creds.expiresAt);
+  });
+
+  @override
   Future<bool> isAccessTokenValid(String accessToken) =>
       _api.isAccessTokenValid(accessToken);
 

@@ -54,7 +54,23 @@ restricted-scope verification. That is not worth it for a single-user app.
   unsynced edits), so another account never sees cached notebooks.
 * The Phase 3 editor is a plain text editor; Monaco arrives in Phase 6.
 
-## Open: decide before Phase 4 (Runtime Manager)
+## Decided (2026-11-01)
+
+* **Runtime connection:** use Google's official **Colab API**
+  (`colaboratory.googleapis.com`, scope `…/auth/colaboratory`), the same API
+  as Google's Colab extension for VS Code. It lists runtime types (CPU/GPU/TPU
+  + eligibility), creates/lists/deletes runtimes and returns a Jupyter
+  connection URL + token, so Strategy A (bridge cell) is not needed.
+  The tunnel/bridge-cell approach was rejected: Colab's FAQ restricts
+  "bypassing the notebook UI" and remote control on free runtimes, and
+  disallows "connecting to remote proxies" on all runtimes. It also can't
+  change CPU/GPU or show usage.
+  The Colab scope is requested **incrementally** (only when the Colab screen
+  is opened), so a refusal can't break sign-in or Drive.
+  Fallback if Google refuses the scope for personal OAuth clients: revisit.
+* **Notifications:** ntfy.sh (free push relay, private random topic).
+
+## Original open questions (kept for reference) (Runtime Manager)
 
 ### 4. Strategy A (bridge cell) cannot work as written. **Decision needed**
 * The Colab kernel's Jupyter server listens on `localhost` **inside Google's VM**.

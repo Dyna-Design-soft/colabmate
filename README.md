@@ -14,8 +14,9 @@ Document*. Spec gaps found during implementation are tracked in
 |---|---|---|
 | 1 | Project setup, dependencies, folder structure | ✅ Done (Google Cloud / Firebase console steps are manual, see below) |
 | 2 | Auth Manager (`token_storage`, `auth_manager`, `auth_provider`, test screen) | ✅ Done. Auth gate A1–A6 passed on Android (2026-11-01) |
-| 3 | Drive Manager (`notebook`, `database`, `notebook_cache`, `drive_manager`, `drive_provider`, list + simple editor screens) | ✅ Code + unit tests done. **Waiting on the manual Drive gate test (D1–D6)** |
-| 4–8 | Runtime, notifications, UI, offline sync | ⏳ Not started |
+| 3 | Drive Manager (`notebook`, `database`, `notebook_cache`, `drive_manager`, `drive_provider`, list + simple editor screens) | ✅ Done. Drive gate D1–D6 passed on Android (2026-11-01) |
+| 4 | Runtime Manager via the official Colab API | 🚧 Step 1: Colab access check (plan, runtime types, runtimes) — **waiting on device test** |
+| 5–8 | Notifications (ntfy.sh), UI, Windows, offline polish | ⏳ Not started |
 
 ## Prerequisites
 

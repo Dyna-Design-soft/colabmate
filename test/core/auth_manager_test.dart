@@ -52,6 +52,28 @@ class FakeBackend implements AuthBackend {
   Object? validateError;
   Completer<void>? refreshGate;
 
+  /// Scopes the user has granted beyond sign-in.
+  bool extraGranted = false;
+  bool userAcceptsPrompt = true;
+  int scopedCalls = 0;
+  final List<String?> staleTokens = [];
+
+  @override
+  Future<ScopedToken?> scopedToken(
+    List<String> scopes, {
+    required bool interactive,
+    String? stale,
+  }) async {
+    scopedCalls++;
+    staleTokens.add(stale);
+    if (!extraGranted && interactive && userAcceptsPrompt) extraGranted = true;
+    if (!extraGranted) return null;
+    return ScopedToken(
+      'scoped-$scopedCalls',
+      now().add(const Duration(hours: 1)),
+    );
+  }
+
   @override
   Future<StoredCredentials> signIn() async {
     signInCalls++;
@@ -260,6 +282,67 @@ void main() {
       store.readError = null;
       expect(await auth.signIn(), _user);
       expect(await auth.isSignedIn(), isTrue);
+    });
+
+    group('extra scopes (Colab)', () {
+      const colab = ['https://www.googleapis.com/auth/colaboratory'];
+
+      test(
+        'not granted + not interactive → ScopeNotGrantedException',
+        () async {
+          final auth = newManager();
+          await auth.signIn();
+          await expectLater(
+            auth.getScopedToken(colab),
+            throwsA(isA<ScopeNotGrantedException>()),
+          );
+        },
+      );
+
+      test('interactive grant, then cached until near expiry', () async {
+        final auth = newManager();
+        await auth.signIn();
+        expect(await auth.getScopedToken(colab, interactive: true), 'scoped-1');
+        expect(await auth.getScopedToken(colab), 'scoped-1');
+        expect(backend.scopedCalls, 1);
+        now = now.add(const Duration(minutes: 56));
+        expect(await auth.getScopedToken(colab), 'scoped-2');
+      });
+
+      test('forceRefresh passes the stale token to discard', () async {
+        final auth = newManager();
+        await auth.signIn();
+        await auth.getScopedToken(colab, interactive: true);
+        expect(
+          await auth.getScopedToken(colab, forceRefresh: true),
+          'scoped-2',
+        );
+        expect(backend.staleTokens.last, 'scoped-1');
+      });
+
+      test('user declining the prompt → ScopeNotGrantedException', () async {
+        backend.userAcceptsPrompt = false;
+        final auth = newManager();
+        await auth.signIn();
+        await expectLater(
+          auth.getScopedToken(colab, interactive: true),
+          throwsA(isA<ScopeNotGrantedException>()),
+        );
+      });
+
+      test('requires sign-in, and sign-out drops cached tokens', () async {
+        final auth = newManager();
+        await expectLater(
+          auth.getScopedToken(colab),
+          throwsA(isA<NotSignedInException>()),
+        );
+        await auth.signIn();
+        await auth.getScopedToken(colab, interactive: true);
+        await auth.signOut();
+        await auth.signIn();
+        await auth.getScopedToken(colab);
+        expect(backend.scopedCalls, 2, reason: 'cache cleared on sign-out');
+      });
     });
 
     test('unreadable stored credentials are discarded', () async {

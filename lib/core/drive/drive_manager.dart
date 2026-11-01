@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../models/notebook.dart';
 import '../auth/auth_exceptions.dart';
+import '../auth/auth_interceptor.dart';
 import '../auth/auth_manager.dart';
 import 'notebook_cache.dart';
 
@@ -66,7 +67,13 @@ class DriveManager {
     _dio.options
       ..connectTimeout ??= const Duration(seconds: 10)
       ..receiveTimeout ??= const Duration(seconds: 30);
-    _dio.interceptors.add(_AuthInterceptor(auth, _dio));
+    _dio.interceptors.add(
+      BearerAuthInterceptor(
+        _dio,
+        token: auth.getAccessToken,
+        refresh: auth.refreshAccessToken,
+      ),
+    );
   }
 
   static const String _api = 'https://www.googleapis.com/drive/v3/files';
@@ -264,56 +271,5 @@ class DriveManager {
       );
     }
     return DriveApiException('Google Drive error $status: ${message ?? data}');
-  }
-}
-
-/// Adds `Authorization: Bearer <token>` and retries once after a 401 with a
-/// freshly refreshed token. (AuthManager already de-duplicates concurrent
-/// refreshes, so a plain — non-queued — interceptor is enough and can't
-/// deadlock when the retried request fails too.)
-class _AuthInterceptor extends Interceptor {
-  _AuthInterceptor(this._auth, this._dio);
-
-  final AuthManager _auth;
-  final Dio _dio;
-
-  @override
-  Future<void> onRequest(
-    RequestOptions options,
-    RequestInterceptorHandler handler,
-  ) async {
-    try {
-      final token = await _auth.getAccessToken();
-      options.headers['Authorization'] = 'Bearer $token';
-      handler.next(options);
-    } catch (e) {
-      handler.reject(DioException(requestOptions: options, error: e));
-    }
-  }
-
-  @override
-  Future<void> onError(
-    DioException err,
-    ErrorInterceptorHandler handler,
-  ) async {
-    final options = err.requestOptions;
-    if (err.response?.statusCode != 401 || options.extra['retried'] == true) {
-      return handler.next(err);
-    }
-    try {
-      final token = await _auth.refreshAccessToken();
-      options
-        ..headers['Authorization'] = 'Bearer $token'
-        ..extra['retried'] = true;
-      handler.resolve(await _dio.fetch<Object?>(options));
-    } on DioException catch (e) {
-      handler.next(e);
-    } catch (e) {
-      // Refresh failed (e.g. access revoked → AuthExpiredException): report
-      // that, not the original 401, so the app can ask to sign in again.
-      handler.next(
-        DioException(requestOptions: options, response: err.response, error: e),
-      );
-    }
   }
 }
