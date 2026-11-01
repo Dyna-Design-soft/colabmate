@@ -13,7 +13,7 @@ Document*. Spec gaps found during implementation are tracked in
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Project setup, dependencies, folder structure | ✅ Done (Google Cloud / Firebase console steps are manual, see below) |
-| 2 | Auth Manager (`token_storage`, `auth_manager`, `auth_provider`, test screen) | ✅ Code + unit tests done. **Waiting on the manual Auth gate test (A1–A6)** |
+| 2 | Auth Manager (`token_storage`, `auth_manager`, `auth_provider`, test screen) | ✅ Code + unit tests done. **Waiting on the manual Auth gate test (A1–A6) on Android** |
 | 3 | Drive Manager | ⏳ Not started (blocked by the Auth gate) |
 | 4–8 | Runtime, notifications, UI, offline sync | ⏳ Not started |
 
@@ -46,7 +46,35 @@ Document*. Spec gaps found during implementation are tracked in
 Firebase/FCM setup (`google-services.json`) is part of Phase 5. It isn't
 needed to build or run Phases 1–4.
 
-## Run
+## Build the APK on GitHub (recommended)
+
+Android is the current focus; Windows builds are paused.
+
+The workflow `.github/workflows/android.yml` runs on every push to `main`,
+`dev` or `claude/**` (or manually: **Actions → Android APK → Run workflow**).
+It analyzes, runs the tests, builds a signed release APK and uploads it as the
+**colabmate-apk** artifact (Actions → latest run → *Artifacts*). Unzip it and
+install the `.apk` on your phone (allow "Install unknown apps").
+
+Repository secrets (**Settings → Secrets and variables → Actions**):
+
+| Secret | Value |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | Base64 of the release keystore (`base64 -w0 colabmate-release.jks`) |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | `colabmate` |
+| `ANDROID_KEY_PASSWORD` | Key password (same as keystore password) |
+| `GOOGLE_SERVER_CLIENT_ID` | The **Web application** OAuth client ID |
+
+Register the release key's **SHA-1** on the **Android** OAuth client (package
+`com.dynaspede.colabmate`). Get it with
+`keytool -list -v -keystore colabmate-release.jks`. Keep the keystore safe:
+losing it means a new SHA-1 and reinstalling the app.
+
+Without the secrets the workflow still builds, but signs with a throwaway debug
+key and Google sign-in will fail.
+
+## Run locally
 
 ```bash
 flutter pub get

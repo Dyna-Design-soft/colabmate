@@ -1,0 +1,93 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main, dev, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.9
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Unit tests
+        run: flutter test
+
+      # Release signing key (stable SHA-1 for the Android OAuth client).
+      # Secrets: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+      #          ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+      - name: Set up release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::ANDROID_KEYSTORE_BASE64 secret not set - APK is signed with a throwaway debug key, so Google sign-in will fail."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/release.jks
+          cat > android/key.properties <<EOF
+          storeFile=app/release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      # OAuth "Web application" client ID (Android serverClientId).
+      - name: Write OAuth config
+        env:
+          GOOGLE_SERVER_CLIENT_ID: ${{ secrets.GOOGLE_SERVER_CLIENT_ID }}
+        run: |
+          if [ -z "$GOOGLE_SERVER_CLIENT_ID" ]; then
+            echo "::warning::GOOGLE_SERVER_CLIENT_ID secret not set - sign-in will show a configuration error."
+          fi
+          mkdir -p config
+          jq -n --arg id "$GOOGLE_SERVER_CLIENT_ID" \
+            '{GOOGLE_SERVER_CLIENT_ID: $id}' > config/oauth.json
+
+      - name: Build release APK
+        run: flutter build apk --release --dart-define-from-file=config/oauth.json
+
+      - name: Rename APK
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             "build/app/outputs/flutter-apk/colabmate-${VERSION}-${GITHUB_SHA::7}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: colabmate-apk
+          path: build/app/outputs/flutter-apk/colabmate-*.apk
+          retention-days: 30
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f android/app/release.jks android/key.properties config/oauth.json
