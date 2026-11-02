@@ -54,9 +54,9 @@ Android is the current focus; Windows builds are paused.
 The workflow `.github/workflows/android.yml` runs on every push to `main`,
 `dev` or `claude/**` (or manually: **Actions → Android APK → Run workflow**).
 It analyzes, runs the tests, builds a signed release APK and publishes it on
-the **Releases** page (https://github.com/Dyna-Design-soft/colabmate/releases)
-as a plain `.apk` file. Open the latest release on your phone, tap the `.apk`
-and install it (allow "Install unknown apps"). Each build has a higher
+the **Releases** page as a plain `.apk` file. On your phone, this link always
+downloads the newest APK directly (allow "Install unknown apps"):
+https://github.com/Dyna-Design-soft/colabmate/releases/latest/download/colabmate.apk Each build has a higher
 version code, so it installs over the previous one.
 
 Repository secrets (**Settings → Secrets and variables → Actions**):

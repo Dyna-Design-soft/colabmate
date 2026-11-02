@@ -82,20 +82,15 @@ jobs:
           --build-number=${{ github.run_number }}
           --dart-define-from-file=config/oauth.json
 
+      # A fixed file name, so this link always downloads the newest APK:
+      # https://github.com/<owner>/<repo>/releases/latest/download/colabmate.apk
       - name: Rename APK
         id: apk
         run: |
           VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
-          NAME="colabmate-v${VERSION}-build${{ github.run_number }}.apk"
-          mv build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/$NAME"
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/colabmate.apk
+          echo "name=colabmate.apk" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: colabmate-apk
-          path: build/app/outputs/flutter-apk/colabmate-*.apk
-          retention-days: 30
 
       # Publish the plain .apk (not zipped) on the Releases page.
       - name: Publish GitHub Release
@@ -108,7 +103,9 @@ jobs:
           make_latest: true
           files: build/app/outputs/flutter-apk/${{ steps.apk.outputs.name }}
           body: |
-            **Download:** tap `${{ steps.apk.outputs.name }}` below and install it on your Android phone (allow "Install unknown apps").
+            **Download the APK:** https://github.com/${{ github.repository }}/releases/latest/download/colabmate.apk
+
+            (Ignore the "Source code" files — GitHub adds those to every release automatically.)
 
             Branch: `${{ github.ref_name }}` · Commit: ${{ github.sha }}
 
